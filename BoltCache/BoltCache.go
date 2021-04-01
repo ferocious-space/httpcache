@@ -2,6 +2,7 @@ package BoltCache
 
 import (
 	"bytes"
+	"io"
 	"sync"
 
 	"github.com/golang/snappy"
@@ -56,16 +57,12 @@ func (b *BoltCache) snappyDecode(encoded []byte) ([]byte, error) {
 	defer b.rbuf.Reset()
 	defer b.reader.Reset(b.rbuf)
 	defer b.rmu.Unlock()
-	result := make([]byte, 0)
+
 	_, err := b.rbuf.Write(encoded)
 	if err != nil {
 		return nil, err
 	}
-	_, err = b.reader.Read(result)
-	if err != nil {
-		return nil, err
-	}
-	return result, nil
+	return io.ReadAll(b.reader)
 }
 
 func (b *BoltCache) Get(key string) (responseBytes []byte, ok bool) {
