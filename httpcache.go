@@ -18,7 +18,7 @@ const (
 	fresh
 	transparent
 	// XFromCache is the header added to responses that are returned from the RedisHTTPCache
-	XFromCache = "X-Cache"
+	XFromCache = "X-Client-Cache"
 )
 
 // A Cache interface is used by the Transport to store and retrieve responses.
