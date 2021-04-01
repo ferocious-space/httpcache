@@ -89,7 +89,7 @@ func (b *BoltCache) Get(key string) (responseBytes []byte, ok bool) {
 }
 
 func (b *BoltCache) Set(key string, responseBytes []byte) {
-	tx, err := b.db.Begin(false)
+	tx, err := b.db.Begin(true)
 	if err != nil {
 		return
 	}
