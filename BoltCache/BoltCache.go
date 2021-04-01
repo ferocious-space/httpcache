@@ -56,7 +56,7 @@ func (b *BoltCache) snappyDecode(encoded []byte) ([]byte, error) {
 	defer b.rbuf.Reset()
 	defer b.reader.Reset(b.rbuf)
 	defer b.rmu.Unlock()
-	var result []byte
+	result := make([]byte, 0)
 	_, err := b.rbuf.Write(encoded)
 	if err != nil {
 		return nil, err
