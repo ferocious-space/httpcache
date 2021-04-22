@@ -5,16 +5,21 @@ import (
 	"bufio"
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"net/http"
 	"net/http/httputil"
+	"net/textproto"
+	"net/url"
 	"strings"
 	"time"
 )
 
 const (
 	stale = iota
+	staleIferror
+	staleWhileRevalidate
 	fresh
 	transparent
 	// XFromCache is the header added to responses that are returned from the RedisHTTPCache
@@ -64,10 +69,28 @@ type Transport struct {
 	MarkCachedResponses bool
 }
 
+type CacheOption func(*cacheParams)
+type cacheParams struct {
+	priv         Cache
+	markResponse bool
+}
+
+func WithMarkedResponses(mark bool) CacheOption {
+	return func(params *cacheParams) {
+		params.markResponse = mark
+	}
+}
+
 // NewTransport returns a new Transport with the
 // provided Cache implementation and MarkCachedResponses set to true
-func NewTransport(c Cache) *Transport {
-	return &Transport{Cache: c, MarkCachedResponses: true}
+func NewTransport(c Cache, opt ...CacheOption) *Transport {
+	params := &cacheParams{
+		markResponse: true,
+	}
+	for _, o := range opt {
+		o(params)
+	}
+	return &Transport{Cache: c, MarkCachedResponses: params.markResponse}
 }
 
 // Client returns an *http.Client that caches responses.
@@ -100,6 +123,7 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	var resp *http.Response
 	cacheKey := cacheKey(req)
 	cacheable := (req.Method == "GET" || req.Method == "HEAD") && req.Header.Get("range") == ""
+
 	var cachedResp *http.Response
 	if cacheable {
 		cachedResp, err = CachedResponse(t.Cache, req)
@@ -114,68 +138,104 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 
 	if cacheable && cachedResp != nil && err == nil {
+
+		//mark the cached response
 		if t.MarkCachedResponses {
 			cachedResp.Header.Set(XFromCache, "1")
 		}
 
+		// check verymatch
 		if varyMatches(cachedResp, req) {
 			// Can only use cached value if the new request doesn't Vary significantly
-			freshness := getFreshness(cachedResp.Header, req.Header)
-			if freshness == fresh {
+			switch getFreshness(cachedResp.Header, req.Header) {
+			case fresh:
 				return cachedResp, nil
-			}
-
-			if freshness == stale {
-				var req2 *http.Request
+			case stale:
+				var clone *http.Request
 				// Add validators if caller hasn't already done so
 				etag := cachedResp.Header.Get("etag")
 				if etag != "" && req.Header.Get("etag") == "" {
-					req2 = cloneRequest(req)
-					req2.Header.Set("if-none-match", etag)
+					clone = req.Clone(req.Context())
+					clone.Header.Set("if-none-match", etag)
 				}
 				lastModified := cachedResp.Header.Get("last-modified")
 				if lastModified != "" && req.Header.Get("last-modified") == "" {
-					if req2 == nil {
-						req2 = cloneRequest(req)
+					if clone == nil {
+						clone = req.Clone(req.Context())
 					}
-					req2.Header.Set("if-modified-since", lastModified)
+					clone.Header.Set("if-modified-since", lastModified)
 				}
-				if req2 != nil {
-					req = req2
+				if clone != nil {
+					req = clone
 				}
 			}
 		}
 
 		resp, err = transport.RoundTrip(req)
-		if err == nil && req.Method == "GET" && resp.StatusCode == http.StatusNotModified {
-			// Replace the 304 response with the one from RedisHTTPCache, but update with some new headers
-			endToEndHeaders := getEndToEndHeaders(resp.Header)
-			for _, header := range endToEndHeaders {
-				cachedResp.Header[header] = resp.Header[header]
+		if err == nil {
+			// handle 5xx family errors if can stale
+			if resp.StatusCode >= 500 && resp.StatusCode != 501 {
+				if req.Method == "GET" && canStaleOnError(cachedResp.Header, req.Header) {
+					cachedResp.Header.Add(
+						textproto.CanonicalMIMEHeaderKey("Warning"),
+						fmt.Sprintf(
+							"110 httpCache \"Response is stale\" %s",
+							time.Now().UTC().Format(time.RFC1123),
+						),
+					)
+					_, _ = io.ReadAll(resp.Body)
+					_ = resp.Body.Close()
+					return cachedResp, nil
+				}
 			}
-			_ = resp.Body.Close()
-			resp = cachedResp
-		} else if (err != nil || resp.StatusCode >= 500) &&
-			req.Method == "GET" && canStaleOnError(cachedResp.Header, req.Header) {
-			// In case of transport failure and stale-if-error activated, returns cached content
-			// when available
-			if resp != nil && resp.Body != nil {
+			switch resp.StatusCode {
+			case http.StatusNotModified:
+				// our cached content is unmodified, swap it
+				endToEndHeaders := getEndToEndHeaders(resp.Header)
+
+				for _, header := range endToEndHeaders {
+					cachedResp.Header[header] = resp.Header[header]
+				}
+
+				// we are not useing the response so drain it and close the body
+				_, _ = io.ReadAll(resp.Body)
 				_ = resp.Body.Close()
-			}
-			return cachedResp, nil
-		} else {
-			if err != nil || resp.StatusCode != http.StatusOK {
+
+				// we set the response to the cached response because they are the same
+				resp = cachedResp
+			case http.StatusNotImplemented:
+				// wat ?
+				t.Cache.Delete(cacheKey)
+				return resp, nil
+			case http.StatusGatewayTimeout, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusInternalServerError:
+				// if we are here we cant stale on error , but dont delete the cache also as this is recoverable state
+				// just proxy the request
+				return resp, err
+			case http.StatusTooManyRequests:
+				// we are getting rate limited , dont delete cache
+				// just proxy the request
+				return resp, err
+			default:
+				// delete the cache if we received something new
 				t.Cache.Delete(cacheKey)
 			}
-			if err != nil {
+		} else {
+			// delete the cache on error
+			rErr := err.(*url.Error)
+			if rErr.Temporary() || rErr.Timeout() {
+				// dont delete cache on temporary errors or timeouts
 				return nil, err
 			}
+			t.Cache.Delete(cacheKey)
+			return nil, err
 		}
 	} else {
+		//no cached response or request not cachable
 		reqCacheControl := parseCacheControl(req.Header)
 		if _, ok := reqCacheControl["only-if-cached"]; ok {
 			resp = newGatewayTimeoutResponse(req)
 		} else {
+			// perform the request
 			resp, err = transport.RoundTrip(req)
 			if err != nil {
 				return nil, err
@@ -184,6 +244,7 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 
 	if cacheable && canStore(parseCacheControl(req.Header), parseCacheControl(resp.Header)) {
+		//resolve all vary headers
 		for _, varyKey := range headerAllCommaSepValues(resp.Header, "vary") {
 			varyKey = http.CanonicalHeaderKey(varyKey)
 			fakeHeader := "X-Varied-" + varyKey
@@ -238,11 +299,7 @@ func (c *realClock) since(d time.Time) time.Duration {
 	return time.Since(d)
 }
 
-type timer interface {
-	since(d time.Time) time.Duration
-}
-
-var clock timer = &realClock{}
+var clock = &realClock{}
 
 // getFreshness will return one of fresh/stale/transparent based on the RedisHTTPCache-control
 // values of the request and the response
@@ -256,13 +313,13 @@ var clock timer = &realClock{}
 func getFreshness(respHeaders, reqHeaders http.Header) (freshness int) {
 	respCacheControl := parseCacheControl(respHeaders)
 	reqCacheControl := parseCacheControl(reqHeaders)
-	if _, ok := reqCacheControl["no-RedisHTTPCache"]; ok {
+	if reqCacheControl.Have("only-if-cached") {
+		return fresh
+	}
+	if reqCacheControl.Have("no-cache") {
 		return transparent
 	}
-	if _, ok := respCacheControl["no-RedisHTTPCache"]; ok {
-		return stale
-	}
-	if _, ok := reqCacheControl["only-if-cached"]; ok {
+	if respCacheControl.Have("immutable") {
 		return fresh
 	}
 
@@ -294,6 +351,7 @@ func getFreshness(respHeaders, reqHeaders http.Header) (freshness int) {
 		}
 	}
 
+	// handle smaxAge
 	if maxAge, ok := reqCacheControl["max-age"]; ok {
 		// the client is willing to accept a response whose age is no greater than the specified time in seconds
 		lifetime, err = time.ParseDuration(maxAge + "s")
@@ -301,6 +359,7 @@ func getFreshness(respHeaders, reqHeaders http.Header) (freshness int) {
 			lifetime = zeroDuration
 		}
 	}
+
 	if minfresh, ok := reqCacheControl["min-fresh"]; ok {
 		//  the client wants a response that will still be fresh for at least the specified number of seconds.
 		minfreshDuration, err := time.ParseDuration(minfresh + "s")
@@ -335,7 +394,6 @@ func getFreshness(respHeaders, reqHeaders http.Header) (freshness int) {
 }
 
 // Returns true if either the request or the response includes the stale-if-error
-// RedisHTTPCache control extension: https://tools.ietf.org/html/rfc5861
 func canStaleOnError(respHeaders, reqHeaders http.Header) bool {
 	respCacheControl := parseCacheControl(respHeaders)
 	reqCacheControl := parseCacheControl(reqHeaders)
@@ -426,21 +484,6 @@ func newGatewayTimeoutResponse(req *http.Request) *http.Response {
 	return resp
 }
 
-// cloneRequest returns a clone of the provided *http.Request.
-// The clone is a shallow copy of the struct and its Header map.
-// (This function copyright goauth2 authors: https://code.google.com/p/goauth2)
-func cloneRequest(r *http.Request) *http.Request {
-	// shallow copy of the struct
-	r2 := new(http.Request)
-	*r2 = *r
-	// deep copy of the Header
-	r2.Header = make(http.Header)
-	for k, s := range r.Header {
-		r2.Header[k] = s
-	}
-	return r2
-}
-
 type cacheControl map[string]string
 
 func parseCacheControl(headers http.Header) cacheControl {
@@ -459,6 +502,11 @@ func parseCacheControl(headers http.Header) cacheControl {
 		}
 	}
 	return cc
+}
+
+func (c cacheControl) Have(key string) bool {
+	_, ok := c[key]
+	return ok
 }
 
 // headerAllCommaSepValues returns all comma-separated values (each
@@ -488,6 +536,8 @@ type cachingReadCloser struct {
 	// OnEOF is called with a copy of the content of R when EOF is reached.
 	OnEOF func(io.Reader)
 
+	eofDone bool
+
 	buf bytes.Buffer // buf stores a copy of the content of R.
 }
 
@@ -498,7 +548,8 @@ type cachingReadCloser struct {
 func (r *cachingReadCloser) Read(p []byte) (n int, err error) {
 	n, err = r.R.Read(p)
 	r.buf.Write(p[:n])
-	if err == io.EOF {
+	if (err == io.EOF || n < len(p)) && !r.eofDone {
+		r.eofDone = true
 		r.OnEOF(bytes.NewReader(r.buf.Bytes()))
 	}
 	return n, err

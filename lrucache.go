@@ -23,9 +23,8 @@ type LruCache struct {
 	size  int64
 }
 
-// New creates an LruCache that will restrict itself to maxSize bytes of
-// memory.  If maxAge > 0, entries will also be expired after maxAge
-// seconds.
+// NewLRUCache creates an LruCache that will restrict itself to maxSize bytes of memory.
+// If maxAge > 0, entries will also be expired after maxAge seconds.
 func NewLRUCache(maxSize, maxAge int64) *LruCache {
 	c := &LruCache{
 		MaxSize: maxSize,
