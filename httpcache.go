@@ -1,6 +1,6 @@
 package httpcache
 
-// https://github.com/gregjones/httpcache + debug logging
+// https://github.com/gregjones/httpcache + minor modifications
 import (
 	"bufio"
 	"bytes"
@@ -8,10 +8,12 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/textproto"
 	"net/url"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -134,7 +136,18 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 	transport := t.Transport
 	if transport == nil {
-		transport = http.DefaultTransport
+		transport = &http.Transport{
+			Proxy: http.ProxyFromEnvironment,
+			DialContext: (&net.Dialer{
+				Timeout:   30 * time.Second,
+				KeepAlive: 30 * time.Second,
+			}).DialContext,
+			MaxIdleConns:          100,
+			IdleConnTimeout:       90 * time.Second,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
+			MaxIdleConnsPerHost:   runtime.GOMAXPROCS(0) + 1,
+		}
 	}
 
 	if cacheable && cachedResp != nil && err == nil {
