@@ -549,8 +549,6 @@ type cachingReadCloser struct {
 	// OnEOF is called with a copy of the content of R when EOF is reached.
 	OnEOF func(io.Reader)
 
-	eofDone bool
-
 	buf bytes.Buffer // buf stores a copy of the content of R.
 }
 
@@ -561,8 +559,7 @@ type cachingReadCloser struct {
 func (r *cachingReadCloser) Read(p []byte) (n int, err error) {
 	n, err = r.R.Read(p)
 	r.buf.Write(p[:n])
-	if (err == io.EOF || n < len(p)) && !r.eofDone {
-		r.eofDone = true
+	if err == io.EOF {
 		r.OnEOF(bytes.NewReader(r.buf.Bytes()))
 	}
 	return n, err
