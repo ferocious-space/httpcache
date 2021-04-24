@@ -6,18 +6,18 @@ import (
 	"time"
 
 	"github.com/gomodule/redigo/redis"
-	"go.uber.org/zap"
 
 	"github.com/ferocious-space/httpcache"
+	"github.com/ferocious-space/httpcache/DoubleCache"
+	"github.com/ferocious-space/httpcache/LruCache"
 )
 
 // RedisHTTPCache is an implementation of httpcache.Cache that caches responses in a
 // redis server.
 
 type RedisHTTPCache struct {
-	p      *redis.Pool
-	uniq   string
-	logger *zap.Logger
+	p    *redis.Pool
+	uniq string
 }
 
 // cacheKey modifies an httpcache key for use in redis. Specifically, it
@@ -30,20 +30,15 @@ func redisKey(key string, uniq string) string {
 func (c RedisHTTPCache) Get(key string) (resp []byte, ok bool) {
 	conn := c.p.Get()
 	if err := conn.Err(); err != nil {
-		c.logger.Named("GET").Error("failed", zap.Error(err))
 		_ = conn.Close()
 		return nil, false
 	}
 	item, err := redis.Bytes(conn.Do("GET", redisKey(key, c.uniq)))
 	if err != nil || err == redis.ErrNil {
-		if err != redis.ErrNil {
-			c.logger.Named("GET").Error("failed", zap.Error(err))
-		}
 		_ = conn.Close()
 		return nil, false
 	}
 	_ = conn.Close()
-	c.logger.Named("GET").Debug(key)
 	return item, true
 }
 
@@ -51,15 +46,10 @@ func (c RedisHTTPCache) Get(key string) (resp []byte, ok bool) {
 func (c RedisHTTPCache) Set(key string, resp []byte) {
 	conn := c.p.Get()
 	if err := conn.Err(); err != nil {
-		c.logger.Named("SET").Error("failed", zap.Error(err))
 		_ = conn.Close()
 		return
 	}
-	_, err := conn.Do("SETEX", redisKey(key, c.uniq), 86400, resp)
-	if err != nil {
-		c.logger.Named("SET").Error("failed", zap.Error(err))
-	}
-	c.logger.Named("SET").Debug(key)
+	_, _ = conn.Do("SETEX", redisKey(key, c.uniq), 86400, resp)
 	_ = conn.Close()
 }
 
@@ -67,36 +57,19 @@ func (c RedisHTTPCache) Set(key string, resp []byte) {
 func (c RedisHTTPCache) Delete(key string) {
 	conn := c.p.Get()
 	if err := conn.Err(); err != nil {
-		c.logger.Named("DELETE").Error("failed", zap.Error(err))
+		_ = conn.Close()
 		return
 	}
-	_, err := conn.Do("DEL", redisKey(key, c.uniq))
-	if err != nil {
-		c.logger.Named("DEL").Error("failed", zap.Error(err))
-	}
-	c.logger.Named("DELETE").Debug(key)
+	_, _ = conn.Do("DEL", redisKey(key, c.uniq))
 	_ = conn.Close()
 }
 
 // NewWithClient returns a new Cache with the given redis connection.
-func NewRedisCache(pool *redis.Pool, uniq string, memorysize int64, logger *zap.Logger) httpcache.Cache {
-	if logger == nil {
-		logger = zap.NewNop()
-	}
-	return httpcache.NewDoubleCache(httpcache.NewLRUCache(memorysize, 0), RedisHTTPCache{pool, uniq, logger.Named("REDIS")})
+func NewRedisCache(pool *redis.Pool, uniq string, memorysize int64) httpcache.Cache {
+	return DoubleCache.NewDoubleCache(LruCache.NewLRUCache(memorysize, 0), RedisHTTPCache{pool, uniq})
 }
 
-func NewRedisOnlyCache(pool *redis.Pool, uniq string, logger *zap.Logger) httpcache.Cache {
-	if logger == nil {
-		logger = zap.NewNop()
-	}
-	return &RedisHTTPCache{pool, uniq, logger.Named("REDIS")}
-}
-
-func NewRedisPool(net, host, port, password string, usetls bool, logger *zap.Logger) *redis.Pool {
-	if logger == nil {
-		logger = zap.NewNop()
-	}
+func NewRedisPool(net, host, port, password string, usetls bool) (*redis.Pool, error) {
 	pool := &redis.Pool{
 		Dial: func() (conn redis.Conn, e error) {
 			c, err := redis.Dial(net, fmt.Sprintf("%s:%s", host, port), redis.DialUseTLS(usetls), redis.DialTLSConfig(&tls.Config{}))
@@ -119,7 +92,7 @@ func NewRedisPool(net, host, port, password string, usetls bool, logger *zap.Log
 		MaxConnLifetime: 600 * time.Second,
 	}
 	if err := pool.Get().Err(); err != nil {
-		logger.Named("SETUP").Named("REDIS").Fatal(err.Error(), zap.Error(err))
+		return nil, err
 	}
-	return pool
+	return pool, nil
 }

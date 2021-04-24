@@ -3,18 +3,23 @@
 // Package twotier provides a wrapper for two httpcache.Cache instances,
 // allowing you to use both a small and fast RedisHTTPCache for popular objects and
 // fall back to a larger and slower RedisHTTPCache for less popular ones.
-package httpcache
+package DoubleCache
+
+import (
+	"github.com/ferocious-space/httpcache"
+	"github.com/ferocious-space/httpcache/LruCache"
+)
 
 // DoubleCache creates a two-tiered RedisHTTPCache out of two httpcache.Cache instances.
 // Reads are favored from first, and writes affect both first and second.
 
 type DoubleCache struct {
-	first  Cache
-	second Cache
+	first  httpcache.Cache
+	second httpcache.Cache
 }
 
 // New creates a DoubleCache. Both first and second must be non-nil.
-func NewDoubleCache(first, second Cache) *DoubleCache {
+func NewDoubleCache(first, second httpcache.Cache) *DoubleCache {
 	if first == nil || second == nil || first == second {
 		return nil
 	}
@@ -23,7 +28,7 @@ func NewDoubleCache(first, second Cache) *DoubleCache {
 
 func (c *DoubleCache) Size() int64 {
 	switch cache := c.first.(type) {
-	case *LruCache:
+	case *LruCache.LruCache:
 		return cache.Size()
 	default:
 		return 0

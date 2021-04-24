@@ -4,6 +4,8 @@ import (
 	"go.etcd.io/bbolt"
 
 	"github.com/ferocious-space/httpcache"
+	"github.com/ferocious-space/httpcache/DoubleCache"
+	"github.com/ferocious-space/httpcache/LruCache"
 )
 
 type BoltCache struct {
@@ -20,7 +22,7 @@ func NewBoltCache(db *bbolt.DB, uniq string) httpcache.Cache {
 	); err != nil {
 		return nil
 	}
-	return httpcache.NewDoubleCache(httpcache.NewLRUCache(1<<20*32, 0), &BoltCache{db: db, uniq: uniq})
+	return DoubleCache.NewDoubleCache(LruCache.NewLRUCache(1<<20*32, 0), &BoltCache{db: db, uniq: uniq})
 }
 
 func (b *BoltCache) Get(key string) (responseBytes []byte, ok bool) {
