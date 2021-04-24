@@ -29,7 +29,7 @@ func NewDoubleCache(first, second httpcache.Cache) *DoubleCache {
 func (c *DoubleCache) Size() int64 {
 	switch cache := c.first.(type) {
 	case *LruCache.LruCache:
-		return cache.Size()
+		return int64(cache.Size())
 	default:
 		return 0
 	}
