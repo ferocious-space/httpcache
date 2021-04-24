@@ -11,6 +11,7 @@ require (
 	github.com/golang/protobuf v1.5.2 // indirect
 	github.com/golang/snappy v0.0.3 // indirect
 	github.com/gomodule/redigo v1.8.4
+	github.com/json-iterator/go v1.1.10 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	go.etcd.io/bbolt v1.3.5
 	go.uber.org/multierr v1.6.0 // indirect

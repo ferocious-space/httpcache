@@ -2,18 +2,16 @@ package BoltCache
 
 import (
 	"go.etcd.io/bbolt"
-	"go.uber.org/zap"
 
 	"github.com/ferocious-space/httpcache"
 )
 
 type BoltCache struct {
-	db     *bbolt.DB
-	uniq   string
-	logger *zap.Logger
+	db   *bbolt.DB
+	uniq string
 }
 
-func NewBoltCache(db *bbolt.DB, uniq string, logger *zap.Logger) httpcache.Cache {
+func NewBoltCache(db *bbolt.DB, uniq string) httpcache.Cache {
 	if err := db.Update(
 		func(tx *bbolt.Tx) error {
 			_, e := tx.CreateBucketIfNotExists([]byte(uniq))
@@ -22,7 +20,7 @@ func NewBoltCache(db *bbolt.DB, uniq string, logger *zap.Logger) httpcache.Cache
 	); err != nil {
 		return nil
 	}
-	return httpcache.NewDoubleCache(httpcache.NewLRUCache(1<<20*32, 0), &BoltCache{db: db, uniq: uniq, logger: logger})
+	return httpcache.NewDoubleCache(httpcache.NewLRUCache(1<<20*32, 0), &BoltCache{db: db, uniq: uniq})
 }
 
 func (b *BoltCache) Get(key string) (responseBytes []byte, ok bool) {

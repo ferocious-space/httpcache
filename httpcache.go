@@ -54,9 +54,8 @@ func CachedResponse(c Cache, req *http.Request) (resp *http.Response, err error)
 	if !ok {
 		return
 	}
-
 	b := bytes.NewBuffer(cachedVal)
-	return http.ReadResponse(bufio.NewReader(b), req)
+	return http.ReadResponse(bufio.NewReaderSize(b, b.Len()), req)
 }
 
 // Transport is an implementation of http.RoundTripper that will return values from a RedisHTTPCache
@@ -73,7 +72,6 @@ type Transport struct {
 
 type CacheOption func(*cacheParams)
 type cacheParams struct {
-	priv         Cache
 	markResponse bool
 }
 
