@@ -14,7 +14,10 @@ func (l *LruCache) Size() int {
 
 func (l *LruCache) Get(key string) (responseBytes []byte, ok bool) {
 	r, o := l.tqc.Get(key)
-	return r.([]byte), o
+	if o {
+		return r.([]byte), o
+	}
+	return nil, o
 }
 
 func (l *LruCache) Set(key string, responseBytes []byte) {
