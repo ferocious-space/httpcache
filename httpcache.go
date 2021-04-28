@@ -16,6 +16,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"golang.org/x/sync/singleflight"
 )
 
 const (
@@ -64,8 +66,9 @@ func CachedResponse(c Cache, req *http.Request) (resp *http.Response, err error)
 type Transport struct {
 	// The RoundTripper interface actually used to make requests
 	// If nil, http.DefaultTransport is used
-	Transport http.RoundTripper
-	Cache     Cache
+	Transport    http.RoundTripper
+	Cache        Cache
+	singleflight singleflight.Group
 	// If true, responses returned from the RedisHTTPCache will be given an extra header, X-From-Cache
 	MarkCachedResponses bool
 }
@@ -181,9 +184,14 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 				}
 			}
 		}
-
-		resp, err = transport.RoundTrip(req)
+		v, err, _ := t.singleflight.Do(
+			cacheKey, func() (interface{}, error) {
+				return transport.RoundTrip(req)
+			},
+		)
+		//resp, err = transport.RoundTrip(req)
 		if err == nil {
+			resp = v.(*http.Response)
 			// handle 5xx family errors if can stale
 			if resp.StatusCode >= 500 && resp.StatusCode != 501 {
 				if req.Method == "GET" && canStaleOnError(cachedResp.Header, req.Header) {
@@ -247,10 +255,16 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 			resp = newGatewayTimeoutResponse(req)
 		} else {
 			// perform the request
-			resp, err = transport.RoundTrip(req)
+			v, err, _ := t.singleflight.Do(
+				cacheKey, func() (interface{}, error) {
+					return transport.RoundTrip(req)
+				},
+			)
+			//resp, err = transport.RoundTrip(req)
 			if err != nil {
 				return nil, err
 			}
+			resp = v.(*http.Response)
 		}
 	}
 
