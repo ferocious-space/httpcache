@@ -66,7 +66,7 @@ func (c RedisHTTPCache) Delete(key string) {
 
 // NewWithClient returns a new Cache with the given redis connection.
 func NewRedisCache(pool *redis.Pool, uniq string, memorysize int64) httpcache.Cache {
-	return DoubleCache.NewDoubleCache(LruCache.NewLRUCache(memorysize, 0), RedisHTTPCache{pool, uniq})
+	return DoubleCache.NewDoubleCache(LruCache.NewLRUCache(int(memorysize)), RedisHTTPCache{pool, uniq})
 }
 
 func NewRedisPool(net, host, port, password string, usetls bool) (*redis.Pool, error) {
