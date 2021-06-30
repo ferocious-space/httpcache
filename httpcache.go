@@ -4,6 +4,7 @@ package httpcache
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -153,7 +154,7 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 	if cacheable && cachedResp != nil && err == nil {
 
-		//mark the cached response
+		// mark the cached response
 		if t.MarkCachedResponses {
 			cachedResp.Header.Set(XFromCache, "1")
 		}
@@ -189,7 +190,7 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 				return transport.RoundTrip(req)
 			},
 		)
-		//resp, err = transport.RoundTrip(req)
+		// resp, err = transport.RoundTrip(req)
 		if err == nil {
 			resp = v.(*http.Response)
 			// handle 5xx family errors if can stale
@@ -242,13 +243,18 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 			// delete the cache on error
 			switch x := err.(type) {
 			case *url.Error:
+				// skip temporary errors
 				if x.Temporary() || x.Timeout() {
 					return nil, err
 				}
-			default:
-				t.Cache.Delete(cacheKey)
+			}
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				// skip deletion on context errors
 				return nil, err
 			}
+
+			t.Cache.Delete(cacheKey)
+			return nil, err
 			// rErr := err.(*url.Error)
 			// if rErr.Temporary() || rErr.Timeout() {
 			// 	// dont delete cache on temporary errors or timeouts
@@ -258,7 +264,7 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 			// return nil, err
 		}
 	} else {
-		//no cached response or request not cachable
+		// no cached response or request not cachable
 		reqCacheControl := parseCacheControl(req.Header)
 		if _, ok := reqCacheControl["only-if-cached"]; ok {
 			resp = newGatewayTimeoutResponse(req)
@@ -269,7 +275,7 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 					return transport.RoundTrip(req)
 				},
 			)
-			//resp, err = transport.RoundTrip(req)
+			// resp, err = transport.RoundTrip(req)
 			if err != nil {
 				return nil, err
 			}
@@ -278,7 +284,7 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 
 	if cacheable && canStore(parseCacheControl(req.Header), parseCacheControl(resp.Header)) {
-		//resolve all vary headers
+		// resolve all vary headers
 		for _, varyKey := range headerAllCommaSepValues(resp.Header, "vary") {
 			varyKey = http.CanonicalHeaderKey(varyKey)
 			fakeHeader := "X-Varied-" + varyKey
