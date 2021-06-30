@@ -240,13 +240,22 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 			}
 		} else {
 			// delete the cache on error
-			rErr := err.(*url.Error)
-			if rErr.Temporary() || rErr.Timeout() {
-				// dont delete cache on temporary errors or timeouts
+			switch x := err.(type) {
+			case *url.Error:
+				if x.Temporary() || x.Timeout() {
+					return nil, err
+				}
+			default:
+				t.Cache.Delete(cacheKey)
 				return nil, err
 			}
-			t.Cache.Delete(cacheKey)
-			return nil, err
+			// rErr := err.(*url.Error)
+			// if rErr.Temporary() || rErr.Timeout() {
+			// 	// dont delete cache on temporary errors or timeouts
+			// 	return nil, err
+			// }
+			// t.Cache.Delete(cacheKey)
+			// return nil, err
 		}
 	} else {
 		//no cached response or request not cachable
