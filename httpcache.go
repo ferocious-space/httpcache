@@ -5,7 +5,6 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -18,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pkg/errors"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -152,9 +152,7 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		}
 	}
 
-	if cacheable && cachedResp != nil && err == nil {
-
-		// mark the cached response
+	if cacheable && cachedResp != nil && err == nil { // mark the cached response
 		if t.MarkCachedResponses {
 			cachedResp.Header.Set(XFromCache, "1")
 		}
@@ -187,7 +185,7 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		}
 		v, err, _ := t.singleflight.Do(
 			cacheKey, func() (interface{}, error) {
-				return transport.RoundTrip(req)
+				return transport.RoundTrip(req) //nolint:bodyclose
 			},
 		)
 		// resp, err = transport.RoundTrip(req)
@@ -241,10 +239,9 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 			}
 		} else {
 			// delete the cache on error
-			switch x := err.(type) {
-			case *url.Error:
-				// skip temporary errors
-				if x.Temporary() || x.Timeout() {
+			var urlError *url.Error
+			if errors.As(err, urlError) {
+				if urlError.Temporary() || urlError.Timeout() {
 					return nil, err
 				}
 			}
@@ -272,7 +269,7 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 			// perform the request
 			v, err, _ := t.singleflight.Do(
 				cacheKey, func() (interface{}, error) {
-					return transport.RoundTrip(req)
+					return transport.RoundTrip(req) //nolint:bodyclose
 				},
 			)
 			// resp, err = transport.RoundTrip(req)
@@ -495,7 +492,7 @@ func getEndToEndHeaders(respHeaders http.Header) []string {
 			hopByHopHeaders[http.CanonicalHeaderKey(extra)] = struct{}{}
 		}
 	}
-	endToEndHeaders := []string{}
+	var endToEndHeaders []string
 	for respHeader := range respHeaders {
 		if _, ok := hopByHopHeaders[respHeader]; !ok {
 			endToEndHeaders = append(endToEndHeaders, respHeader)
@@ -586,7 +583,7 @@ type cachingReadCloser struct {
 func (r *cachingReadCloser) Read(p []byte) (n int, err error) {
 	n, err = r.R.Read(p)
 	r.buf.Write(p[:n])
-	if err == io.EOF {
+	if errors.Is(err, io.EOF) {
 		r.OnEOF(bytes.NewReader(r.buf.Bytes()))
 	}
 	return n, err
