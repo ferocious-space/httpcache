@@ -292,17 +292,25 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		}
 		switch req.Method {
 		case "GET":
+			bodyBuffer := new(bytes.Buffer)
+			_, err := io.Copy(bodyBuffer, resp.Body)
+			if err != nil {
+				return nil, err
+			}
+			resp.Body.Close()
+			resp.Body = ioutil.NopCloser(bodyBuffer)
 			// Delay caching until EOF is reached.
-			resp.Body = &cachingReadCloser{
-				R: resp.Body,
-				OnEOF: func(r io.Reader) {
-					resp := *resp
-					resp.Body = ioutil.NopCloser(r)
-					respBytes, err := httputil.DumpResponse(&resp, true)
-					if err == nil {
-						t.Cache.Set(cacheKey, respBytes)
-					}
-				},
+			//resp.Body = &cachingReadCloser{
+			//	R: resp.Body,
+			//	OnEOF: func(r io.Reader) {
+			//		resp := *resp
+			//		resp.Body = ioutil.NopCloser(r)
+			rc := *resp
+			respBytes, err := httputil.DumpResponse(&rc, true)
+			if err == nil {
+				t.Cache.Set(cacheKey, respBytes)
+				//	}
+				//},
 			}
 		default:
 			respBytes, err := httputil.DumpResponse(resp, true)

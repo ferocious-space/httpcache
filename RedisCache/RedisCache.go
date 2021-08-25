@@ -2,6 +2,7 @@ package RedisCache
 
 import (
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"time"
 
@@ -34,7 +35,7 @@ func (c RedisHTTPCache) Get(key string) (resp []byte, ok bool) {
 		return nil, false
 	}
 	item, err := redis.Bytes(conn.Do("GET", redisKey(key, c.uniq)))
-	if err != nil || err == redis.ErrNil {
+	if err != nil || errors.Is(err, redis.ErrNil) {
 		_ = conn.Close()
 		return nil, false
 	}
