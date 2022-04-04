@@ -157,7 +157,7 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 			cachedResp.Header.Set(XFromCache, "1")
 		}
 
-		// check verymatch
+		// check vary-match
 		if varyMatches(cachedResp, req) {
 			// Can only use cached value if the new request doesn't Vary significantly
 			switch getFreshness(cachedResp.Header, req.Header) {
@@ -215,7 +215,7 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 					cachedResp.Header[header] = resp.Header[header]
 				}
 
-				// we are not useing the response so drain it and close the body
+				// we are not using the response so drain it and close the body
 				_, _ = io.ReadAll(resp.Body)
 				_ = resp.Body.Close()
 
