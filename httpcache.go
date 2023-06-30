@@ -154,7 +154,7 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 	if cacheable && cachedResp != nil && err == nil { // mark the cached response
 		if t.MarkCachedResponses {
-			cachedResp.Header.Set(XFromCache, "1")
+			cachedResp.Header.Set(XFromCache, cachedResp.Header.Get("Date"))
 		}
 
 		// check vary-match
@@ -240,7 +240,7 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		} else {
 			// delete the cache on error
 			var urlError *url.Error
-			if errors.As(err, urlError) {
+			if errors.As(err, &urlError) {
 				if urlError.Temporary() || urlError.Timeout() {
 					return nil, err
 				}
