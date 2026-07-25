@@ -6,8 +6,13 @@ cache (an API client or browser — not a shared proxy).
 
 Derived from [gregjones/httpcache](https://github.com/gregjones/httpcache)
 (MIT), which is archived. The cache-policy core is largely unchanged; this
-fork adds request deduplication, transparent pass-through of 5xx and 429
-responses, `immutable` support, and an in-memory byte-bounded cache.
+fork adds deduplication of concurrent revalidations, transparent pass-through
+of 5xx and 429 responses, `immutable` support, a size ceiling on what may be
+stored, and an in-memory byte-bounded cache.
+
+Responses stream to the caller: an entry is written as the body is read rather
+than buffered first, so a large download is not held in memory and its first
+bytes are not withheld until the origin finishes.
 
 ## Install
 
@@ -36,6 +41,29 @@ Responses served from cache carry an `X-Client-Cache` header whose value is
 the cached response's `Date`. Disable that marking with
 `httpcache.NewTransport(cache, httpcache.WithMarkedResponses(false))`.
 
+### Options
+
+| Option | Default | Effect |
+|---|---|---|
+| `WithMarkedResponses(bool)` | `true` | Adds `X-Client-Cache` to responses served from cache |
+| `WithMaxCacheableBytes(int64)` | 10 MiB | Largest body that may be stored. Larger responses are delivered in full, just not cached. Negative removes the ceiling |
+
+Both are also settable directly on the `Transport` struct. `MaxCacheableBytes`
+left at zero means the default, not "cache nothing", so a hand-built
+`&Transport{Cache: c}` is still bounded.
+
+### Reading the body matters
+
+An entry is stored only once its body reaches EOF. A caller that closes a body
+without reading it caches nothing — storing a partial body and later replaying
+it as a complete response would be worse than not caching at all. If your code
+sometimes abandons bodies early, drain them:
+
+```go
+io.Copy(io.Discard, resp.Body)
+resp.Body.Close()
+```
+
 ## Bring your own storage
 
 This module ships only an in-memory cache. Anything persistent — disk, an
@@ -59,6 +87,14 @@ The contract implementations must honour:
 | `Get` reports a miss as `ok=false`, never an error | There is no error channel; treat backend failure as a miss |
 | `Delete` of an absent key succeeds silently | The transport deletes speculatively |
 | Eviction at any time is allowed | The transport treats it as a miss and refetches |
+
+A working bbolt implementation lives in
+[`integration/boltcache_test.go`](integration/boltcache_test.go) — compiled and
+covered by tests rather than pasted here where it would drift. Copy it as a
+starting point. It also documents the two mistakes worth avoiding: `Delete`
+needs a **writable** transaction, and `Get` must **copy** before returning,
+because bbolt hands back a slice into its memory-mapped file that stays valid
+only for the life of the transaction.
 
 ### Two-tier caching
 
