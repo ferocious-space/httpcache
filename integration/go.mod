@@ -14,6 +14,7 @@ replace github.com/ferocious-space/httpcache => ../
 require (
 	github.com/ferocious-space/httpcache v0.0.0-00010101000000-000000000000
 	github.com/labstack/echo/v4 v4.15.4
+	go.etcd.io/bbolt v1.5.0
 )
 
 require (
