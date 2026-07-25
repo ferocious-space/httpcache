@@ -1,44 +1,58 @@
-// https://github.com/die-net/lrucache/blob/master/twotier/twotier.go + added Size()
-
-// Package twotier provides a wrapper for two httpcache.Cache instances,
-// allowing you to use both a small and fast RedisHTTPCache for popular objects and
-// fall back to a larger and slower RedisHTTPCache for less popular ones.
+// Package DoubleCache provides a wrapper for two httpcache.Cache instances,
+// allowing a small, fast cache for popular objects to fall back to a larger,
+// slower one for less popular objects.
+//
+// Derived from https://github.com/die-net/lrucache/blob/master/twotier/twotier.go
 package DoubleCache
 
 import (
+	"errors"
+	"reflect"
+
 	"github.com/ferocious-space/httpcache"
-	"github.com/ferocious-space/httpcache/LruCache"
 )
 
-// DoubleCache creates a two-tiered RedisHTTPCache out of two httpcache.Cache instances.
-// Reads are favored from first, and writes affect both first and second.
-
+// DoubleCache is a two-tier cache built from two httpcache.Cache instances.
+// Reads are favoured from first; writes go to second and invalidate first.
+//
+// It is safe for concurrent use if both tiers are.
 type DoubleCache struct {
 	first  httpcache.Cache
 	second httpcache.Cache
 }
 
-// New creates a DoubleCache. Both first and second must be non-nil.
-func NewDoubleCache(first, second httpcache.Cache) *DoubleCache {
-	if first == nil || second == nil || first == second {
-		return nil
+// NewDoubleCache returns a two-tier cache. Both tiers must be non-nil and
+// must not be the same instance.
+func NewDoubleCache(first, second httpcache.Cache) (*DoubleCache, error) {
+	if isNilCache(first) {
+		return nil, errors.New("DoubleCache: first tier is nil")
 	}
-	return &DoubleCache{first: first, second: second}
+	if isNilCache(second) {
+		return nil, errors.New("DoubleCache: second tier is nil")
+	}
+	if first == second {
+		return nil, errors.New("DoubleCache: both tiers are the same instance")
+	}
+	return &DoubleCache{first: first, second: second}, nil
 }
 
-func (c *DoubleCache) Size() int64 {
-	switch cache := c.first.(type) {
-	case *LruCache.LruCache:
-		return int64(cache.Size())
+// isNilCache reports whether c carries no usable value: either an untyped nil
+// interface, or a nil pointer/map/slice/func/channel wrapped in a non-nil
+// interface, which would panic on the first method call.
+func isNilCache(c httpcache.Cache) bool {
+	if c == nil {
+		return true
+	}
+	switch v := reflect.ValueOf(c); v.Kind() {
+	case reflect.Pointer, reflect.Map, reflect.Slice, reflect.Func, reflect.Chan:
+		return v.IsNil()
 	default:
-		return 0
+		return false
 	}
 }
 
-// Get returns the []byte representation of a cached response and a bool set
-// to true if the key was found.  It tries the first tier RedisHTTPCache, and if
-// that's not successful, copies the result from the second tier into the
-// first tier.
+// Get tries the fast tier first and, on a miss, promotes a hit from the slow
+// tier into the fast one.
 func (c *DoubleCache) Get(key string) ([]byte, bool) {
 	if value, ok := c.first.Get(key); ok {
 		return value, true
@@ -51,16 +65,14 @@ func (c *DoubleCache) Get(key string) ([]byte, bool) {
 	return value, true
 }
 
-// Set stores the []byte representation of a response for a given key into
-// the second tier RedisHTTPCache, and deletes the RedisHTTPCache entry from the first tier
-// RedisHTTPCache.
+// Set stores the response in the slow tier and invalidates the fast tier, so
+// the next read promotes the authoritative copy.
 func (c *DoubleCache) Set(key string, value []byte) {
 	c.second.Set(key, value)
 	c.first.Delete(key)
 }
 
-// Delete removes the value associated with a key from both the first and
-// second tier caches.
+// Delete removes the key from both tiers.
 func (c *DoubleCache) Delete(key string) {
 	c.second.Delete(key)
 	c.first.Delete(key)
